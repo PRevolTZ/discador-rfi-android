@@ -17,7 +17,7 @@ jobs:
       APP_NOME: AGYWH DISCADOR
       APP_ID: br.com.rfi.discador
       VERSION_CODE: ${{ github.run_number }}
-      TEM_CHAVE_LOJA: ${{ secrets.UPLOAD_KEY_B64 != '' }}
+      TEM_CHAVE_LOJA: ${{ secrets.UPLOAD_PASS != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -404,14 +404,23 @@ jobs:
           cp app/build/outputs/apk/debug/app-debug.apk ../AGYWH-DISCADOR-${VERSION_CODE}.apk
 
       - name: Compilar pacote da Play Store (AAB)
-        env:
-          UPLOAD_KEY_B64: ${{ secrets.UPLOAD_KEY_B64 }}
-          UPLOAD_PASS: ${{ secrets.UPLOAD_PASS }}
-          UPLOAD_ALIAS: ${{ secrets.UPLOAD_ALIAS }}
         if: env.TEM_CHAVE_LOJA == 'true'
+        env:
+          UPLOAD_PASS: ${{ secrets.UPLOAD_PASS }}
         run: |
-          echo "$UPLOAD_KEY_B64" | base64 -d > upload.jks
-          export UPLOAD_JKS="$PWD/upload.jks"
+          set -e
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          if [ ! -f chaves/upload.p12 ]; then
+            mkdir -p chaves
+            keytool -genkeypair -keystore chaves/upload.p12 -storetype PKCS12 -storepass "$UPLOAD_PASS" -alias upload \
+              -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=AGYWH DISCADOR, O=Igor Oliveira, C=BR"
+            git pull --rebase
+            git add chaves/upload.p12
+            git commit -m "Chave de upload da loja [skip ci]"
+            git push
+          fi
+          export UPLOAD_JKS="$PWD/chaves/upload.p12" UPLOAD_ALIAS=upload
           cd projeto
           gradle bundleRelease --no-daemon
           cp app/build/outputs/bundle/release/app-release.aab ../AGYWH-DISCADOR-${VERSION_CODE}.aab
