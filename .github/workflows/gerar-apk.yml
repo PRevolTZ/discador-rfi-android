@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       APP_URL: https://discador-igor.netlify.app/
-      APP_NOME: Discador RFI
+      APP_NOME: AGYHW DISCADOR
       APP_ID: br.com.rfi.discador
       VERSION_CODE: ${{ github.run_number }}
       TEM_CHAVE_LOJA: ${{ secrets.UPLOAD_KEY_B64 != '' }}
@@ -25,8 +25,6 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-
-      - uses: android-actions/setup-android@v3
 
       - uses: gradle/actions/setup-gradle@v4
         with:
@@ -136,7 +134,7 @@ jobs:
           cat > $P/app/src/main/res/values/themes.xml <<'EOF'
           <resources>
               <style name="Tema" parent="android:Theme.Material.Light.NoActionBar">
-                  <item name="android:statusBarColor">#0b3d91</item>
+                  <item name="android:statusBarColor">#08246e</item>
                   <item name="android:navigationBarColor">#f3f6fb</item>
                   <item name="android:windowBackground">@android:color/white</item>
               </style>
@@ -200,7 +198,7 @@ jobs:
                       @Override
                       public void onPageFinished(WebView v, String u) {
                           v.evaluateJavascript(
-                              "(function(){if(window.__app)return;window.__app=1;" +
+                              "(function(){document.title='AGYHW DISCADOR';document.querySelectorAll('.brand').forEach(function(h){h.textContent='AGYHW ';var sp=document.createElement('span');sp.textContent='DISCADOR';h.appendChild(sp)});if(window.__app)return;window.__app=1;" +
                               "var c=HTMLAnchorElement.prototype.click;" +
                               "HTMLAnchorElement.prototype.click=function(){" +
                               "if(this.download&&/^blob:/.test(this.href)){var n=this.download;" +
@@ -320,17 +318,39 @@ jobs:
           EOF
 
 
-      - name: Ícones (da foto publicada no site)
+      - name: Ícones (logo AGYHW DISCADOR)
         run: |
           set -e
-          command -v convert >/dev/null || (sudo apt-get update -y && sudo apt-get install -y imagemagick)
-          curl -fsSL "${APP_URL}icon-512.png" -o icone.png
+          pip install --quiet pillow
+          ls /usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf >/dev/null 2>&1 || (sudo apt-get update -y && sudo apt-get install -y fonts-dejavu-core)
+          cat > icone.py <<'EOF'
+          from PIL import Image, ImageDraw, ImageFont, ImageFilter
+          S=1024; img=Image.new("RGBA",(S,S),(0,0,0,0))
+          g=Image.new("RGB",(S,S)); d=ImageDraw.Draw(g)
+          for y in range(S):
+              t=y/S; d.line([(0,y),(S,y)],fill=(int(8+(31-8)*t),int(36+(110-36)*t),int(110+(230-110)*t)))
+          m=Image.new("L",(S,S),0); ImageDraw.Draw(m).ellipse((0,0,S-1,S-1),fill=255)
+          img.paste(g,(0,0),m); d=ImageDraw.Draw(img)
+          d.ellipse((36,36,S-37,S-37),outline=(255,255,255,80),width=12)
+          B="/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+          cx,cy=500,470
+          for i,r in enumerate((90,150,210)):
+              d.arc((cx+60-r,cy-90-r,cx+60+r,cy-90+r),start=-80,end=-10,fill=(126,224,168,255-i*50),width=30)
+          f=ImageFont.truetype(B,440)
+          sh=Image.new("RGBA",(S,S),(0,0,0,0)); ImageDraw.Draw(sh).text((cx+10,cy+20),"☎",font=f,fill=(0,0,0,120),anchor="mm")
+          img.alpha_composite(sh.filter(ImageFilter.GaussianBlur(16)))
+          d=ImageDraw.Draw(img); d.text((cx,cy),"☎",font=f,fill="white",anchor="mm")
+          d.text((S/2,S-235),"AGYHW",font=ImageFont.truetype(B,118),fill="white",anchor="mm")
+          d.text((S/2,S-140),"DISCADOR",font=ImageFont.truetype(B,58),fill=(126,224,168),anchor="mm")
+          img.save("icone.png")
+          img.resize((512,512)).save("icone-loja-512.png")
+          EOF
+          python3 icone.py
           for d in mdpi:48 hdpi:72 xhdpi:96 xxhdpi:144 xxxhdpi:192; do
             n=${d%%:*}; s=${d##*:}
             mkdir -p projeto/app/src/main/res/mipmap-$n
-            convert icone.png -resize ${s}x${s} projeto/app/src/main/res/mipmap-$n/ic_launcher.png
+            python3 -c "from PIL import Image;Image.open('icone.png').resize(($s,$s),Image.LANCZOS).save('projeto/app/src/main/res/mipmap-$n/ic_launcher.png')"
           done
-          convert icone.png -resize 512x512 icone-loja-512.png
 
       - name: Chave de teste fixa (para atualizar o app sem desinstalar)
         run: |
@@ -350,7 +370,7 @@ jobs:
         run: |
           cd projeto
           gradle assembleDebug --no-daemon --stacktrace
-          cp app/build/outputs/apk/debug/app-debug.apk ../Discador-RFI-${VERSION_CODE}.apk
+          cp app/build/outputs/apk/debug/app-debug.apk ../AGYHW-Discador-${VERSION_CODE}.apk
 
       - name: Compilar pacote da Play Store (AAB)
         env:
@@ -363,15 +383,15 @@ jobs:
           export UPLOAD_JKS="$PWD/upload.jks"
           cd projeto
           gradle bundleRelease --no-daemon
-          cp app/build/outputs/bundle/release/app-release.aab ../Discador-RFI-${VERSION_CODE}.aab
+          cp app/build/outputs/bundle/release/app-release.aab ../AGYHW-Discador-${VERSION_CODE}.aab
 
       - name: Publicar para download
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v1.0.${{ github.run_number }}
-          name: Discador RFI 1.0.${{ github.run_number }}
+          name: AGYHW DISCADOR 1.0.${{ github.run_number }}
           body: "Baixe o arquivo .apk no celular Android e instale."
           files: |
-            Discador-RFI-*.apk
-            Discador-RFI-*.aab
+            AGYHW-Discador-*.apk
+            AGYHW-Discador-*.aab
             icone-loja-512.png
