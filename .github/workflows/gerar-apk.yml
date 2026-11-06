@@ -100,6 +100,10 @@ jobs:
               <uses-permission android:name="android.permission.CALL_PHONE" />
               <uses-permission android:name="android.permission.READ_CALENDAR" />
               <uses-permission android:name="android.permission.WRITE_CALENDAR" />
+              <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+              <uses-permission android:name="android.permission.READ_CONTACTS" />
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+              <uses-permission android:name="android.permission.REORDER_TASKS" />
               <uses-feature android:name="android.hardware.telephony" android:required="false" />
               <queries>
                   <package android:name="com.whatsapp" />
@@ -232,7 +236,7 @@ jobs:
                   });
                   if (estado != null) web.restoreState(estado); else web.loadUrl(url);
                   java.util.List<String> faltam = new java.util.ArrayList<>();
-                  for (String p : new String[]{Manifest.permission.CALL_PHONE, Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR})
+                  for (String p : new String[]{Manifest.permission.CALL_PHONE, Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR, Manifest.permission.READ_PHONE_STATE, "android.permission.POST_NOTIFICATIONS"})
                       if (checkSelfPermission(p) != PackageManager.PERMISSION_GRANTED) faltam.add(p);
                   if (!faltam.isEmpty()) requestPermissions(faltam.toArray(new String[0]), PEDIDO_INICIO);
               }
@@ -277,7 +281,7 @@ jobs:
               private void ligar(String numero) {
                   String n = Uri.decode(numero).replaceAll("[^0-9+*#]", "");
                   if (checkSelfPermission(Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED) {
-                      try { startActivity(new Intent(Intent.ACTION_CALL, Uri.parse("tel:" + Uri.encode(n)))); }
+                      try { startActivity(new Intent(Intent.ACTION_CALL, Uri.parse("tel:" + Uri.encode(n)))); vigiarLigacao(); }
                       catch (Exception e) { discar(n); }
                   } else {
                       numeroPendente = n;
@@ -311,6 +315,14 @@ jobs:
 
               class Ponte {
                   @JavascriptInterface public boolean app() { return true; }
+                  @JavascriptInterface public String contatos() {
+                      if (checkSelfPermission(Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) { runOnUiThread(() -> requestPermissions(new String[]{Manifest.permission.READ_CONTACTS}, PEDIDO_INICIO)); return "[]"; }
+                      org.json.JSONArray a = new org.json.JSONArray();
+                      try (Cursor c = getContentResolver().query(android.provider.ContactsContract.CommonDataKinds.Phone.CONTENT_URI, new String[]{android.provider.ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME, android.provider.ContactsContract.CommonDataKinds.Phone.NUMBER}, null, null, android.provider.ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME + " ASC")) {
+                          while (c != null && c.moveToNext() && a.length() < 5000) { org.json.JSONObject o = new org.json.JSONObject(); o.put("n", c.getString(0)); o.put("t", c.getString(1)); a.put(o); }
+                      } catch (Exception e) {}
+                      return a.toString();
+                  }
                   @JavascriptInterface public boolean agendar(String id, String titulo, double ini, double fim, String desc) {
                       if (checkSelfPermission(Manifest.permission.WRITE_CALENDAR) != PackageManager.PERMISSION_GRANTED) {
                           runOnUiThread(() -> requestPermissions(new String[]{Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR}, PEDIDO_INICIO));
@@ -362,7 +374,46 @@ jobs:
 
               @Override protected void onSaveInstanceState(Bundle s) { super.onSaveInstanceState(s); web.saveState(s); }
               @Override protected void onPause() { super.onPause(); web.onPause(); }
-              @Override protected void onResume() { super.onResume(); web.onResume(); }
+                            private boolean emLigacao = false; private Object ouvinte = null;
+              private void vigiarLigacao() {
+                  if (checkSelfPermission(Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) { requestPermissions(new String[]{Manifest.permission.READ_PHONE_STATE}, PEDIDO_INICIO); return; }
+                  final android.telephony.TelephonyManager tm = (android.telephony.TelephonyManager) getSystemService(TELEPHONY_SERVICE);
+                  emLigacao = false; pararVigia();
+                  try {
+                      if (Build.VERSION.SDK_INT >= 31) {
+                          class Cb extends android.telephony.TelephonyCallback implements android.telephony.TelephonyCallback.CallStateListener { public void onCallStateChanged(int st) { estadoLigacao(st); } }
+                          Cb cb = new Cb(); ouvinte = cb; tm.registerTelephonyCallback(getMainExecutor(), cb);
+                      } else {
+                          android.telephony.PhoneStateListener l = new android.telephony.PhoneStateListener() { @Override public void onCallStateChanged(int st, String num) { estadoLigacao(st); } };
+                          ouvinte = l; tm.listen(l, android.telephony.PhoneStateListener.LISTEN_CALL_STATE);
+                      }
+                  } catch (Exception e) {}
+              }
+              private void pararVigia() {
+                  if (ouvinte == null) return;
+                  android.telephony.TelephonyManager tm = (android.telephony.TelephonyManager) getSystemService(TELEPHONY_SERVICE);
+                  try { if (Build.VERSION.SDK_INT >= 31) tm.unregisterTelephonyCallback((android.telephony.TelephonyCallback) ouvinte); else tm.listen((android.telephony.PhoneStateListener) ouvinte, 0); } catch (Exception e) {}
+                  ouvinte = null;
+              }
+              private void estadoLigacao(int st) {
+                  if (st == android.telephony.TelephonyManager.CALL_STATE_OFFHOOK) emLigacao = true;
+                  else if (st == android.telephony.TelephonyManager.CALL_STATE_IDLE && emLigacao) { emLigacao = false; pararVigia(); runOnUiThread(this::voltarAoApp); }
+              }
+              private void voltarAoApp() {
+                  Intent i = new Intent(this, MainActivity.class);
+                  i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                  try { startActivity(i); } catch (Exception e) {}
+                  try { ((android.app.ActivityManager) getSystemService(ACTIVITY_SERVICE)).moveTaskToFront(getTaskId(), 0); } catch (Exception e) {}
+                  try {
+                      android.app.NotificationManager nm = (android.app.NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+                      if (Build.VERSION.SDK_INT >= 26) nm.createNotificationChannel(new android.app.NotificationChannel("ligacao", "Fim de ligação", android.app.NotificationManager.IMPORTANCE_HIGH));
+                      android.app.PendingIntent pi = android.app.PendingIntent.getActivity(this, 1, i, android.app.PendingIntent.FLAG_IMMUTABLE | android.app.PendingIntent.FLAG_UPDATE_CURRENT);
+                      android.app.Notification.Builder nb = Build.VERSION.SDK_INT >= 26 ? new android.app.Notification.Builder(this, "ligacao") : new android.app.Notification.Builder(this);
+                      nb.setSmallIcon(getApplicationInfo().icon).setContentTitle("Ligação encerrada").setContentText("Toque para registrar o resultado").setContentIntent(pi).setAutoCancel(true);
+                      nm.notify(77, nb.build());
+                  } catch (Exception e) {}
+              }
+              @Override protected void onResume() { super.onResume(); web.onResume(); try { ((android.app.NotificationManager) getSystemService(NOTIFICATION_SERVICE)).cancel(77); } catch (Exception e) {} }
               @Override public void onBackPressed() { if (web.canGoBack()) web.goBack(); else super.onBackPressed(); }
           }
           EOF
