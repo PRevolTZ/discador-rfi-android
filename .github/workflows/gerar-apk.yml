@@ -205,11 +205,11 @@ jobs:
                       @Override
                       public void onPageFinished(WebView v, String u) {
                           v.evaluateJavascript(
-                              "(function(){document.title='AGYWH DISCADOR';document.querySelectorAll('.brand').forEach(function(h){h.textContent='AGYWH ';var sp=document.createElement('span');sp.textContent='DISCADOR';h.appendChild(sp)});if(window.__app)return;window.__app=1;" +
+                              "(function(){document.title='AGYWH DISCADOR';document.querySelectorAll('.brand').forEach(function(h){h.textContent='AGYWH ';var sp=document.createElement('span');sp.textContent='DISCADOR';h.appendChild(sp)});if(window.__app)return;window.__app=2;" +
                               "var c=HTMLAnchorElement.prototype.click;" +
                               "HTMLAnchorElement.prototype.click=function(){" +
                               "if(this.download&&/^blob:/.test(this.href)){var n=this.download;" +
-                              "fetch(this.href).then(function(r){return r.text()}).then(function(t){DiscadorApp.salvar(n,t)});return;}" +
+                              "fetch(this.href).then(function(r){return r.blob()}).then(function(b){var f=new FileReader();f.onload=function(){DiscadorApp.salvar(n,f.result)};f.readAsDataURL(b)});return;}" +
                               "return c.apply(this,arguments)};})()", null);
                       }
                   });
@@ -342,11 +342,13 @@ jobs:
                   }
                   @JavascriptInterface public void salvar(String nome, String conteudo) {
                       try {
-                          byte[] b = conteudo.getBytes(StandardCharsets.UTF_8);
+                          String mime = "text/csv"; byte[] b;
+                          if (conteudo.startsWith("data:")) { int k = conteudo.indexOf(','); int s = conteudo.indexOf(';'); if (s > 5 && s < k) mime = conteudo.substring(5, s); b = android.util.Base64.decode(conteudo.substring(k + 1), android.util.Base64.DEFAULT); }
+                          else b = conteudo.getBytes(StandardCharsets.UTF_8);
                           if (Build.VERSION.SDK_INT >= 29) {
                               ContentValues cv = new ContentValues();
                               cv.put(MediaStore.Downloads.DISPLAY_NAME, nome);
-                              cv.put(MediaStore.Downloads.MIME_TYPE, "text/csv");
+                              cv.put(MediaStore.Downloads.MIME_TYPE, mime);
                               Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
                               try (OutputStream o = getContentResolver().openOutputStream(uri)) { o.write(b); }
                           } else {
