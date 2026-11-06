@@ -1,0 +1,377 @@
+name: Gerar APK do Discador
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    runs-on: ubuntu-latest
+    env:
+      APP_URL: https://discador-igor.netlify.app/
+      APP_NOME: Discador RFI
+      APP_ID: br.com.rfi.discador
+      VERSION_CODE: ${{ github.run_number }}
+      TEM_CHAVE_LOJA: ${{ secrets.UPLOAD_KEY_B64 != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
+
+      - name: Montar projeto Android
+        run: |
+          set -e
+          P=projeto
+          J=$P/app/src/main/java/br/com/rfi/discador
+          mkdir -p $J $P/app/src/main/res/values $P/app/src/main/res/xml
+
+          cat > $P/settings.gradle <<'EOF'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositories { google(); mavenCentral() } }
+          rootProject.name = "DiscadorRFI"
+          include(":app")
+          EOF
+
+          cat > $P/build.gradle <<'EOF'
+          plugins { id 'com.android.application' version '8.7.3' apply false }
+          EOF
+
+          echo "android.useAndroidX=true" > $P/gradle.properties
+
+          cat > $P/app/build.gradle <<'EOF'
+          plugins { id 'com.android.application' }
+          def vc = (System.getenv("VERSION_CODE") ?: "1").toInteger()
+          android {
+              namespace 'br.com.rfi.discador'
+              compileSdk 35
+              defaultConfig {
+                  applicationId System.getenv("APP_ID") ?: 'br.com.rfi.discador'
+                  minSdk 24
+                  targetSdk 35
+                  versionCode vc
+                  versionName "1.0.${vc}"
+              }
+              signingConfigs {
+                  teste {
+                      storeFile file("../../chaves/teste.jks")
+                      storePassword "discador-teste"
+                      keyAlias "teste"
+                      keyPassword "discador-teste"
+                  }
+                  loja {
+                      if (System.getenv("UPLOAD_JKS")) {
+                          storeFile file(System.getenv("UPLOAD_JKS"))
+                          storePassword System.getenv("UPLOAD_PASS")
+                          keyAlias System.getenv("UPLOAD_ALIAS")
+                          keyPassword System.getenv("UPLOAD_PASS")
+                      }
+                  }
+              }
+              buildTypes {
+                  debug { signingConfig signingConfigs.teste }
+                  release {
+                      minifyEnabled false
+                      signingConfig System.getenv("UPLOAD_JKS") ? signingConfigs.loja : signingConfigs.teste
+                  }
+              }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+          }
+          EOF
+
+          cat > $P/app/src/main/AndroidManifest.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.CALL_PHONE" />
+              <uses-feature android:name="android.hardware.telephony" android:required="false" />
+              <queries>
+                  <package android:name="com.whatsapp" />
+                  <package android:name="com.whatsapp.w4b" />
+                  <intent><action android:name="android.intent.action.VIEW" /><data android:scheme="https" /></intent>
+                  <intent><action android:name="android.intent.action.GET_CONTENT" /></intent>
+              </queries>
+              <application
+                  android:label="@string/app_name"
+                  android:icon="@mipmap/ic_launcher"
+                  android:roundIcon="@mipmap/ic_launcher"
+                  android:theme="@style/Tema"
+                  android:allowBackup="false"
+                  android:usesCleartextTraffic="false">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:launchMode="singleTask"
+                      android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode"
+                      android:windowSoftInputMode="adjustResize">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          cat > $P/app/src/main/res/values/strings.xml <<EOF
+          <resources><string name="app_name">${APP_NOME}</string></resources>
+          EOF
+
+          cat > $P/app/src/main/res/values/themes.xml <<'EOF'
+          <resources>
+              <style name="Tema" parent="android:Theme.Material.Light.NoActionBar">
+                  <item name="android:statusBarColor">#0b3d91</item>
+                  <item name="android:navigationBarColor">#f3f6fb</item>
+                  <item name="android:windowBackground">@android:color/white</item>
+              </style>
+          </resources>
+          EOF
+
+          cat > $J/MainActivity.java <<'EOF'
+          package br.com.rfi.discador;
+
+          import android.Manifest;
+          import android.app.Activity;
+          import android.content.ActivityNotFoundException;
+          import android.content.ContentValues;
+          import android.content.Intent;
+          import android.content.pm.PackageManager;
+          import android.net.Uri;
+          import android.os.Build;
+          import android.os.Bundle;
+          import android.os.Environment;
+          import android.provider.MediaStore;
+          import android.webkit.JavascriptInterface;
+          import android.webkit.ValueCallback;
+          import android.webkit.WebChromeClient;
+          import android.webkit.WebResourceRequest;
+          import android.webkit.WebSettings;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+          import android.widget.Toast;
+          import java.io.File;
+          import java.io.FileOutputStream;
+          import java.io.OutputStream;
+          import java.nio.charset.StandardCharsets;
+
+          public class MainActivity extends Activity {
+              private static final int PEDIDO_LIGAR = 9;
+              private static final int PEDIDO_ARQUIVO = 7;
+              private WebView web;
+              private String numeroPendente;
+              private ValueCallback<Uri[]> arquivoCb;
+              private String host;
+
+              @Override
+              protected void onCreate(Bundle estado) {
+                  super.onCreate(estado);
+                  String url = BuildConfigUrl.URL;
+                  host = Uri.parse(url).getHost();
+                  web = new WebView(this);
+                  setContentView(web);
+                  WebSettings s = web.getSettings();
+                  s.setJavaScriptEnabled(true);
+                  s.setDomStorageEnabled(true);
+                  s.setDatabaseEnabled(true);
+                  s.setMediaPlaybackRequiresUserGesture(true);
+                  s.setUserAgentString(s.getUserAgentString() + " DiscadorApp/1");
+                  web.addJavascriptInterface(new Ponte(), "DiscadorApp");
+                  web.setWebViewClient(new WebViewClient() {
+                      @Override
+                      public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) {
+                          return trata(r.getUrl().toString());
+                      }
+                      @Override
+                      public void onPageFinished(WebView v, String u) {
+                          v.evaluateJavascript(
+                              "(function(){if(window.__app)return;window.__app=1;" +
+                              "var c=HTMLAnchorElement.prototype.click;" +
+                              "HTMLAnchorElement.prototype.click=function(){" +
+                              "if(this.download&&/^blob:/.test(this.href)){var n=this.download;" +
+                              "fetch(this.href).then(function(r){return r.text()}).then(function(t){DiscadorApp.salvar(n,t)});return;}" +
+                              "return c.apply(this,arguments)};})()", null);
+                      }
+                  });
+                  web.setWebChromeClient(new WebChromeClient() {
+                      @Override
+                      public boolean onShowFileChooser(WebView v, ValueCallback<Uri[]> cb, FileChooserParams p) {
+                          if (arquivoCb != null) arquivoCb.onReceiveValue(null);
+                          arquivoCb = cb;
+                          try {
+                              Intent i = new Intent(Intent.ACTION_GET_CONTENT);
+                              i.addCategory(Intent.CATEGORY_OPENABLE);
+                              i.setType("*/*");
+                              startActivityForResult(Intent.createChooser(i, "Escolher arquivo"), PEDIDO_ARQUIVO);
+                          } catch (Exception e) {
+                              arquivoCb = null;
+                              return false;
+                          }
+                          return true;
+                      }
+                  });
+                  if (estado != null) web.restoreState(estado); else web.loadUrl(url);
+              }
+
+              private boolean trata(String u) {
+                  if (u.startsWith("tel:")) { ligar(u.substring(4)); return true; }
+                  if (u.startsWith("intent:")) {
+                      try {
+                          Intent i = Intent.parseUri(u, Intent.URI_INTENT_SCHEME);
+                          try { startActivity(i); }
+                          catch (ActivityNotFoundException e) {
+                              String f = i.getStringExtra("browser_fallback_url");
+                              if (f != null) abrirFora(f);
+                          }
+                      } catch (Exception e) { aviso("Não foi possível abrir o WhatsApp"); }
+                      return true;
+                  }
+                  Uri x = Uri.parse(u);
+                  if (("https".equals(x.getScheme()) || "http".equals(x.getScheme())) && host != null && host.equals(x.getHost())) return false;
+                  abrirFora(u);
+                  return true;
+              }
+
+              private void abrirFora(String u) {
+                  try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(u))); }
+                  catch (Exception e) { aviso("Nenhum aplicativo para abrir este link"); }
+              }
+
+              private void ligar(String numero) {
+                  String n = Uri.decode(numero).replaceAll("[^0-9+*#]", "");
+                  if (checkSelfPermission(Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED) {
+                      try { startActivity(new Intent(Intent.ACTION_CALL, Uri.parse("tel:" + Uri.encode(n)))); }
+                      catch (Exception e) { discar(n); }
+                  } else {
+                      numeroPendente = n;
+                      requestPermissions(new String[]{Manifest.permission.CALL_PHONE}, PEDIDO_LIGAR);
+                  }
+              }
+
+              private void discar(String n) {
+                  try { startActivity(new Intent(Intent.ACTION_DIAL, Uri.parse("tel:" + Uri.encode(n)))); } catch (Exception e) {}
+              }
+
+              @Override
+              public void onRequestPermissionsResult(int pedido, String[] perms, int[] res) {
+                  super.onRequestPermissionsResult(pedido, perms, res);
+                  if (pedido != PEDIDO_LIGAR || numeroPendente == null) return;
+                  String n = numeroPendente; numeroPendente = null;
+                  if (res.length > 0 && res[0] == PackageManager.PERMISSION_GRANTED) ligar(n);
+                  else { aviso("Sem permissão de chamadas: abrindo o discador do celular"); discar(n); }
+              }
+
+              @Override
+              protected void onActivityResult(int pedido, int resultado, Intent dados) {
+                  super.onActivityResult(pedido, resultado, dados);
+                  if (pedido == PEDIDO_ARQUIVO && arquivoCb != null) {
+                      arquivoCb.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(resultado, dados));
+                      arquivoCb = null;
+                  }
+              }
+
+              private void aviso(String t) { runOnUiThread(() -> Toast.makeText(this, t, Toast.LENGTH_LONG).show()); }
+
+              class Ponte {
+                  @JavascriptInterface public boolean app() { return true; }
+                  @JavascriptInterface public void salvar(String nome, String conteudo) {
+                      try {
+                          byte[] b = conteudo.getBytes(StandardCharsets.UTF_8);
+                          if (Build.VERSION.SDK_INT >= 29) {
+                              ContentValues cv = new ContentValues();
+                              cv.put(MediaStore.Downloads.DISPLAY_NAME, nome);
+                              cv.put(MediaStore.Downloads.MIME_TYPE, "text/csv");
+                              Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
+                              try (OutputStream o = getContentResolver().openOutputStream(uri)) { o.write(b); }
+                          } else {
+                              File f = new File(getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), nome);
+                              try (FileOutputStream o = new FileOutputStream(f)) { o.write(b); }
+                          }
+                          aviso("Arquivo salvo em Downloads: " + nome);
+                      } catch (Exception e) { aviso("Não foi possível salvar o arquivo"); }
+                  }
+              }
+
+              @Override protected void onSaveInstanceState(Bundle s) { super.onSaveInstanceState(s); web.saveState(s); }
+              @Override protected void onPause() { super.onPause(); web.onPause(); }
+              @Override protected void onResume() { super.onResume(); web.onResume(); }
+              @Override public void onBackPressed() { if (web.canGoBack()) web.goBack(); else super.onBackPressed(); }
+          }
+          EOF
+
+          cat > $J/BuildConfigUrl.java <<EOF
+          package br.com.rfi.discador;
+          final class BuildConfigUrl { static final String URL = "${APP_URL}"; }
+          EOF
+
+
+      - name: Ícones (da foto publicada no site)
+        run: |
+          set -e
+          command -v convert >/dev/null || (sudo apt-get update -y && sudo apt-get install -y imagemagick)
+          curl -fsSL "${APP_URL}icon-512.png" -o icone.png
+          for d in mdpi:48 hdpi:72 xhdpi:96 xxhdpi:144 xxxhdpi:192; do
+            n=${d%%:*}; s=${d##*:}
+            mkdir -p projeto/app/src/main/res/mipmap-$n
+            convert icone.png -resize ${s}x${s} projeto/app/src/main/res/mipmap-$n/ic_launcher.png
+          done
+          convert icone.png -resize 512x512 icone-loja-512.png
+
+      - name: Chave de teste fixa (para atualizar o app sem desinstalar)
+        run: |
+          set -e
+          if [ ! -f chaves/teste.jks ]; then
+            mkdir -p chaves
+            keytool -genkeypair -v -keystore chaves/teste.jks -storepass discador-teste -keypass discador-teste \
+              -alias teste -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Discador Teste, O=RFI, C=BR"
+            git config user.name "github-actions"
+            git config user.email "github-actions@users.noreply.github.com"
+            git add chaves/teste.jks
+            git commit -m "Chave de teste do APK [skip ci]"
+            git push
+          fi
+
+      - name: Compilar APK
+        run: |
+          cd projeto
+          gradle assembleDebug --no-daemon --stacktrace
+          cp app/build/outputs/apk/debug/app-debug.apk ../Discador-RFI-${VERSION_CODE}.apk
+
+      - name: Compilar pacote da Play Store (AAB)
+        env:
+          UPLOAD_KEY_B64: ${{ secrets.UPLOAD_KEY_B64 }}
+          UPLOAD_PASS: ${{ secrets.UPLOAD_PASS }}
+          UPLOAD_ALIAS: ${{ secrets.UPLOAD_ALIAS }}
+        if: env.TEM_CHAVE_LOJA == 'true'
+        run: |
+          echo "$UPLOAD_KEY_B64" | base64 -d > upload.jks
+          export UPLOAD_JKS="$PWD/upload.jks"
+          cd projeto
+          gradle bundleRelease --no-daemon
+          cp app/build/outputs/bundle/release/app-release.aab ../Discador-RFI-${VERSION_CODE}.aab
+
+      - name: Publicar para download
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: Discador RFI 1.0.${{ github.run_number }}
+          body: "Baixe o arquivo .apk no celular Android e instale."
+          files: |
+            Discador-RFI-*.apk
+            Discador-RFI-*.aab
+            icone-loja-512.png
