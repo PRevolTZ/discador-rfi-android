@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       APP_URL: https://discador-igor.netlify.app/
-      APP_NOME: AGYHW DISCADOR
+      APP_NOME: AGYWH DISCADOR
       APP_ID: br.com.rfi.discador
       VERSION_CODE: ${{ github.run_number }}
       TEM_CHAVE_LOJA: ${{ secrets.UPLOAD_KEY_B64 != '' }}
@@ -98,6 +98,8 @@ jobs:
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <uses-permission android:name="android.permission.INTERNET" />
               <uses-permission android:name="android.permission.CALL_PHONE" />
+              <uses-permission android:name="android.permission.READ_CALENDAR" />
+              <uses-permission android:name="android.permission.WRITE_CALENDAR" />
               <uses-feature android:name="android.hardware.telephony" android:required="false" />
               <queries>
                   <package android:name="com.whatsapp" />
@@ -147,7 +149,11 @@ jobs:
           import android.Manifest;
           import android.app.Activity;
           import android.content.ActivityNotFoundException;
+          import android.content.ContentUris;
           import android.content.ContentValues;
+          import android.content.SharedPreferences;
+          import android.database.Cursor;
+          import android.provider.CalendarContract;
           import android.content.Intent;
           import android.content.pm.PackageManager;
           import android.net.Uri;
@@ -171,6 +177,7 @@ jobs:
           public class MainActivity extends Activity {
               private static final int PEDIDO_LIGAR = 9;
               private static final int PEDIDO_ARQUIVO = 7;
+              private static final int PEDIDO_INICIO = 5;
               private WebView web;
               private String numeroPendente;
               private ValueCallback<Uri[]> arquivoCb;
@@ -198,7 +205,7 @@ jobs:
                       @Override
                       public void onPageFinished(WebView v, String u) {
                           v.evaluateJavascript(
-                              "(function(){document.title='AGYHW DISCADOR';document.querySelectorAll('.brand').forEach(function(h){h.textContent='AGYHW ';var sp=document.createElement('span');sp.textContent='DISCADOR';h.appendChild(sp)});if(window.__app)return;window.__app=1;" +
+                              "(function(){document.title='AGYWH DISCADOR';document.querySelectorAll('.brand').forEach(function(h){h.textContent='AGYWH ';var sp=document.createElement('span');sp.textContent='DISCADOR';h.appendChild(sp)});if(window.__app)return;window.__app=1;" +
                               "var c=HTMLAnchorElement.prototype.click;" +
                               "HTMLAnchorElement.prototype.click=function(){" +
                               "if(this.download&&/^blob:/.test(this.href)){var n=this.download;" +
@@ -224,6 +231,23 @@ jobs:
                       }
                   });
                   if (estado != null) web.restoreState(estado); else web.loadUrl(url);
+                  java.util.List<String> faltam = new java.util.ArrayList<>();
+                  for (String p : new String[]{Manifest.permission.CALL_PHONE, Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR})
+                      if (checkSelfPermission(p) != PackageManager.PERMISSION_GRANTED) faltam.add(p);
+                  if (!faltam.isEmpty()) requestPermissions(faltam.toArray(new String[0]), PEDIDO_INICIO);
+              }
+
+              private long calendario() {
+                  String[] cols = {CalendarContract.Calendars._ID, CalendarContract.Calendars.ACCOUNT_TYPE, CalendarContract.Calendars.IS_PRIMARY, CalendarContract.Calendars.CALENDAR_ACCESS_LEVEL};
+                  long melhor = -1; int nota = -1;
+                  try (Cursor c = getContentResolver().query(CalendarContract.Calendars.CONTENT_URI, cols, CalendarContract.Calendars.VISIBLE + "=1", null, null)) {
+                      while (c != null && c.moveToNext()) {
+                          if (c.getInt(3) < CalendarContract.Calendars.CAL_ACCESS_CONTRIBUTOR) continue;
+                          int n = ("com.google".equals(c.getString(1)) ? 2 : 0) + (c.getInt(2) == 1 ? 1 : 0);
+                          if (n > nota) { nota = n; melhor = c.getLong(0); }
+                      }
+                  } catch (Exception e) {}
+                  return melhor;
               }
 
               private boolean trata(String u) {
@@ -287,6 +311,35 @@ jobs:
 
               class Ponte {
                   @JavascriptInterface public boolean app() { return true; }
+                  @JavascriptInterface public boolean agendar(String id, String titulo, double ini, double fim, String desc) {
+                      if (checkSelfPermission(Manifest.permission.WRITE_CALENDAR) != PackageManager.PERMISSION_GRANTED) {
+                          runOnUiThread(() -> requestPermissions(new String[]{Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR}, PEDIDO_INICIO));
+                          return false;
+                      }
+                      try {
+                          long cal = calendario();
+                          if (cal < 0) return false;
+                          SharedPreferences sp = getSharedPreferences("agenda", MODE_PRIVATE);
+                          long ev = sp.getLong(id, -1);
+                          ContentValues v = new ContentValues();
+                          v.put(CalendarContract.Events.DTSTART, (long) ini);
+                          v.put(CalendarContract.Events.DTEND, (long) fim);
+                          v.put(CalendarContract.Events.TITLE, titulo);
+                          v.put(CalendarContract.Events.DESCRIPTION, desc);
+                          v.put(CalendarContract.Events.CALENDAR_ID, cal);
+                          v.put(CalendarContract.Events.EVENT_TIMEZONE, java.util.TimeZone.getDefault().getID());
+                          if (ev > 0 && getContentResolver().update(ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, ev), v, null, null) > 0) return true;
+                          Uri u = getContentResolver().insert(CalendarContract.Events.CONTENT_URI, v);
+                          long nid = Long.parseLong(u.getLastPathSegment());
+                          ContentValues r = new ContentValues();
+                          r.put(CalendarContract.Reminders.EVENT_ID, nid);
+                          r.put(CalendarContract.Reminders.MINUTES, 10);
+                          r.put(CalendarContract.Reminders.METHOD, CalendarContract.Reminders.METHOD_ALERT);
+                          getContentResolver().insert(CalendarContract.Reminders.CONTENT_URI, r);
+                          sp.edit().putLong(id, nid).apply();
+                          return true;
+                      } catch (Exception e) { return false; }
+                  }
                   @JavascriptInterface public void salvar(String nome, String conteudo) {
                       try {
                           byte[] b = conteudo.getBytes(StandardCharsets.UTF_8);
@@ -318,34 +371,12 @@ jobs:
           EOF
 
 
-      - name: Ícones (logo AGYHW DISCADOR)
+      - name: Ícones (logo AGYWH DISCADOR, do site)
         run: |
           set -e
           pip install --quiet pillow
-          ls /usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf >/dev/null 2>&1 || (sudo apt-get update -y && sudo apt-get install -y fonts-dejavu-core)
-          cat > icone.py <<'EOF'
-          from PIL import Image, ImageDraw, ImageFont, ImageFilter
-          S=1024; img=Image.new("RGBA",(S,S),(0,0,0,0))
-          g=Image.new("RGB",(S,S)); d=ImageDraw.Draw(g)
-          for y in range(S):
-              t=y/S; d.line([(0,y),(S,y)],fill=(int(8+(31-8)*t),int(36+(110-36)*t),int(110+(230-110)*t)))
-          m=Image.new("L",(S,S),0); ImageDraw.Draw(m).ellipse((0,0,S-1,S-1),fill=255)
-          img.paste(g,(0,0),m); d=ImageDraw.Draw(img)
-          d.ellipse((36,36,S-37,S-37),outline=(255,255,255,80),width=12)
-          B="/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-          cx,cy=500,470
-          for i,r in enumerate((90,150,210)):
-              d.arc((cx+60-r,cy-90-r,cx+60+r,cy-90+r),start=-80,end=-10,fill=(126,224,168,255-i*50),width=30)
-          f=ImageFont.truetype(B,440)
-          sh=Image.new("RGBA",(S,S),(0,0,0,0)); ImageDraw.Draw(sh).text((cx+10,cy+20),"☎",font=f,fill=(0,0,0,120),anchor="mm")
-          img.alpha_composite(sh.filter(ImageFilter.GaussianBlur(16)))
-          d=ImageDraw.Draw(img); d.text((cx,cy),"☎",font=f,fill="white",anchor="mm")
-          d.text((S/2,S-235),"AGYHW",font=ImageFont.truetype(B,118),fill="white",anchor="mm")
-          d.text((S/2,S-140),"DISCADOR",font=ImageFont.truetype(B,58),fill=(126,224,168),anchor="mm")
-          img.save("icone.png")
-          img.resize((512,512)).save("icone-loja-512.png")
-          EOF
-          python3 icone.py
+          curl -fsSL "${APP_URL}icon-512.png?v=${VERSION_CODE}" -o icone.png
+          python3 -c "from PIL import Image;Image.open('icone.png').save('icone-loja-512.png')"
           for d in mdpi:48 hdpi:72 xhdpi:96 xxhdpi:144 xxxhdpi:192; do
             n=${d%%:*}; s=${d##*:}
             mkdir -p projeto/app/src/main/res/mipmap-$n
@@ -370,7 +401,7 @@ jobs:
         run: |
           cd projeto
           gradle assembleDebug --no-daemon --stacktrace
-          cp app/build/outputs/apk/debug/app-debug.apk ../AGYHW-Discador-${VERSION_CODE}.apk
+          cp app/build/outputs/apk/debug/app-debug.apk ../AGYWH-DISCADOR-${VERSION_CODE}.apk
 
       - name: Compilar pacote da Play Store (AAB)
         env:
@@ -383,15 +414,15 @@ jobs:
           export UPLOAD_JKS="$PWD/upload.jks"
           cd projeto
           gradle bundleRelease --no-daemon
-          cp app/build/outputs/bundle/release/app-release.aab ../AGYHW-Discador-${VERSION_CODE}.aab
+          cp app/build/outputs/bundle/release/app-release.aab ../AGYWH-DISCADOR-${VERSION_CODE}.aab
 
       - name: Publicar para download
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v1.0.${{ github.run_number }}
-          name: AGYHW DISCADOR 1.0.${{ github.run_number }}
+          name: AGYWH DISCADOR 1.0.${{ github.run_number }}
           body: "Baixe o arquivo .apk no celular Android e instale."
           files: |
-            AGYHW-Discador-*.apk
-            AGYHW-Discador-*.aab
+            AGYWH-DISCADOR-*.apk
+            AGYWH-DISCADOR-*.aab
             icone-loja-512.png
