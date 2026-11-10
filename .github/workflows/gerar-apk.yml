@@ -28,7 +28,7 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "8.10.2"
+          gradle-version: "8.11.1"
 
       - name: Montar projeto Android
         run: |
@@ -45,7 +45,7 @@ jobs:
           EOF
 
           cat > $P/build.gradle <<'EOF'
-          plugins { id 'com.android.application' version '8.7.3' apply false }
+          plugins { id 'com.android.application' version '8.9.1' apply false }
           EOF
 
           echo "android.useAndroidX=true" > $P/gradle.properties
@@ -55,11 +55,11 @@ jobs:
           def vc = (System.getenv("VERSION_CODE") ?: "1").toInteger()
           android {
               namespace 'br.com.rfi.discador'
-              compileSdk 35
+              compileSdk 36
               defaultConfig {
                   applicationId System.getenv("APP_ID") ?: 'br.com.rfi.discador'
                   minSdk 24
-                  targetSdk 35
+                  targetSdk 36
                   versionCode vc
                   versionName "1.0.${vc}"
               }
